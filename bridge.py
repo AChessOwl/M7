@@ -6,13 +6,29 @@ import json
 def connect_to(chain):
     if chain == 'source':
         api_url = "https://api.avax-test.network/ext/bc/C/rpc"
+        w3 = Web3(Web3.HTTPProvider(api_url))
+        w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+        return w3
     elif chain == 'destination':
-        api_url = "https://data-seed-prebsc-1-s1.binance.org:8545/"
+        endpoints = [
+            "https://bsc-testnet-rpc.publicnode.com",
+            "https://bsc-testnet.public.blastapi.io",
+            "https://endpoints.omniatech.io/v1/bsc/testnet/public",
+            "https://data-seed-prebsc-2-s1.binance.org:8545/",
+            "https://data-seed-prebsc-1-s2.binance.org:8545/",
+        ]
+        for url in endpoints:
+            try:
+                w3 = Web3(Web3.HTTPProvider(url))
+                w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+                if w3.is_connected():
+                    print(f"Connected to destination via {url}")
+                    return w3
+            except Exception:
+                continue
+        return None
     else:
         return None
-    w3 = Web3(Web3.HTTPProvider(api_url))
-    w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
-    return w3
 
 
 def get_contract_info(chain, contract_info):
@@ -21,9 +37,8 @@ def get_contract_info(chain, contract_info):
     return contracts[chain]
 
 
-def get_events_chunked(contract_event, from_block, to_block):
+def get_events_chunked(contract_event, from_block, to_block, step=2):
     events = []
-    step = 2
     for start in range(from_block, to_block + 1, step):
         end = min(start + step - 1, to_block)
         try:
@@ -44,7 +59,6 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     source_info = get_contract_info('source', contract_info)
     dest_info = get_contract_info('destination', contract_info)
 
-    # Fix: key must exist in contract_info.json
     warden_private_key = source_info['private_key']
 
     source_w3 = connect_to('source')
@@ -54,6 +68,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         address=Web3.to_checksum_address(source_info['address']),
         abi=source_info['abi']
     )
+
     dest_contract = dest_w3.eth.contract(
         address=Web3.to_checksum_address(dest_info['address']),
         abi=dest_info['abi']
@@ -62,14 +77,15 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     if chain == 'source':
         w3 = source_w3
         latest_block = w3.eth.block_number
-        from_block = max(0, latest_block - 50)  # increased lookback
+        from_block = max(0, latest_block - 50)
 
         print(f"Scanning source blocks {from_block}-{latest_block}")
 
         events = get_events_chunked(
             source_contract.events.Deposit,
             from_block,
-            latest_block
+            latest_block,
+            step=2
         )
 
         warden_account = dest_w3.eth.account.from_key(warden_private_key)
@@ -103,14 +119,15 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     else:  # destination
         w3 = dest_w3
         latest_block = w3.eth.block_number
-        from_block = max(0, latest_block - 50)  # increased lookback
+        from_block = max(0, latest_block - 50)
 
         print(f"Scanning destination blocks {from_block}-{latest_block}")
 
         events = get_events_chunked(
             dest_contract.events.Unwrap,
             from_block,
-            latest_block
+            latest_block,
+            step=1  
         )
 
         warden_account = source_w3.eth.account.from_key(warden_private_key)
