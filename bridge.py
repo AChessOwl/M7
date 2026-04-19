@@ -3,44 +3,46 @@ import time
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
 
+BSC_RPCS = [
+    "https://data-seed-prebsc-1-s1.binance.org:8545/",
+    "https://data-seed-prebsc-2-s1.binance.org:8545/",
+    "https://data-seed-prebsc-1-s2.binance.org:8545/",
+    "https://data-seed-prebsc-2-s2.binance.org:8545/",
+    "https://data-seed-prebsc-1-s3.binance.org:8545/",
+    "https://data-seed-prebsc-2-s3.binance.org:8545/",
+]
+
+
+def make_w3(rpc_url):
+    w3 = Web3(Web3.HTTPProvider(rpc_url))
+    w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+    return w3
+
 
 def connect_to(chain):
     if chain == 'source':
-        urls = [
-            "https://api.avax-test.network/ext/bc/C/rpc",
-        ]
-    elif chain == 'destination':
-        urls = [
-            "https://data-seed-prebsc-1-s1.binance.org:8545/",
-            "https://data-seed-prebsc-2-s1.binance.org:8545/",
-            "https://data-seed-prebsc-1-s2.binance.org:8545/",
-            "https://data-seed-prebsc-2-s2.binance.org:8545/",
-            "https://data-seed-prebsc-1-s3.binance.org:8545/",
-            "https://data-seed-prebsc-2-s3.binance.org:8545/",
-        ]
-    else:
-        raise ValueError(f"Unknown chain: {chain}")
-
-    for url in urls:
+        return make_w3("https://api.avax-test.network/ext/bc/C/rpc")
+    for url in BSC_RPCS:
         try:
-            w3 = Web3(Web3.HTTPProvider(url))
-            w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+            w3 = make_w3(url)
             if w3.is_connected():
                 return w3
         except Exception:
             continue
+    raise ConnectionError("Could not connect to any BSC RPC")
 
-    raise ConnectionError(f"Could not connect to any RPC for {chain}")
 
-
-def get_logs_with_retry(contract_event, from_block, to_block, retries=6, delay=5):
-    for attempt in range(retries):
+def get_logs_with_retry(abi, address, event_name, from_block, to_block):
+    for i, url in enumerate(BSC_RPCS):
         try:
-            return contract_event.get_logs(from_block=from_block, to_block=to_block)
+            w3  = make_w3(url)
+            contract = w3.eth.contract(address=address, abi=abi)
+            event    = getattr(contract.events, event_name)
+            return event.get_logs(from_block=from_block, to_block=to_block)
         except Exception as e:
-            print(f"  get_logs attempt {attempt+1} failed: {e}")
-            time.sleep(delay)
-    raise RuntimeError("get_logs failed after all retries")
+            print(f"  get_logs attempt {i+1} failed ({url}): {e}")
+            time.sleep(2)
+    raise RuntimeError("get_logs failed on all BSC RPC endpoints")
 
 
 def get_contract_info(chain, contract_info_path="contract_info.json"):
@@ -71,15 +73,14 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     source_contract = source_w3.eth.contract(address=source_info['address'], abi=source_info['abi'])
     dest_contract   = dest_w3.eth.contract(address=dest_info['address'],     abi=dest_info['abi'])
 
-    w3       = source_w3 if chain == 'source' else dest_w3
-    contract = source_contract if chain == 'source' else dest_contract
+    w3 = source_w3 if chain == 'source' else dest_w3
 
     latest_block = w3.eth.block_number
     from_block   = max(0, latest_block - 5)
     print(f"Scanning blocks {from_block}-{latest_block} on {chain}")
 
     if chain == 'source':
-        events = get_logs_with_retry(contract.events.Deposit, from_block, latest_block)
+        events = source_contract.events.Deposit.get_logs(from_block=from_block, to_block=latest_block)
         for evt in events:
             token     = evt['args']['token']
             recipient = evt['args']['recipient']
@@ -97,7 +98,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             print(f"  wrap() called on destination, tx hash: {tx_hash.hex()}, status: {receipt['status']}")
 
     else:
-        events = get_logs_with_retry(contract.events.Unwrap, from_block, latest_block)
+        events = get_logs_with_retry(dest_info['abi'], dest_info['address'], 'Unwrap', from_block, latest_block)
         for evt in events:
             underlying_token = evt['args']['underlying_token']
             recipient        = evt['args']['to']
