@@ -1,4 +1,5 @@
 import json
+import time
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
 
@@ -30,6 +31,16 @@ def connect_to(chain):
             continue
 
     raise ConnectionError(f"Could not connect to any RPC for {chain}")
+
+
+def get_logs_with_retry(contract_event, from_block, to_block, retries=6, delay=5):
+    for attempt in range(retries):
+        try:
+            return contract_event.get_logs(from_block=from_block, to_block=to_block)
+        except Exception as e:
+            print(f"  get_logs attempt {attempt+1} failed: {e}")
+            time.sleep(delay)
+    raise RuntimeError("get_logs failed after all retries")
 
 
 def get_contract_info(chain, contract_info_path="contract_info.json"):
@@ -68,7 +79,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     print(f"Scanning blocks {from_block}-{latest_block} on {chain}")
 
     if chain == 'source':
-        events = contract.events.Deposit.get_logs(from_block=from_block, to_block=latest_block)
+        events = get_logs_with_retry(contract.events.Deposit, from_block, latest_block)
         for evt in events:
             token     = evt['args']['token']
             recipient = evt['args']['recipient']
@@ -86,7 +97,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             print(f"  wrap() called on destination, tx hash: {tx_hash.hex()}, status: {receipt['status']}")
 
     else:
-        events = contract.events.Unwrap.get_logs(from_block=from_block, to_block=latest_block)
+        events = get_logs_with_retry(contract.events.Unwrap, from_block, latest_block)
         for evt in events:
             underlying_token = evt['args']['underlying_token']
             recipient        = evt['args']['to']
