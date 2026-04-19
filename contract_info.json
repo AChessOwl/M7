@@ -1,6 +1,7 @@
 {
   "source": {
     "address": "0x4BF0352297eC36ABB657c88f7625332f5B6f34d9",
+    "private_key": "0x0f0fc26a06b87c3b2eb6b9fc5c804eaab57fa68a6efa8f3b0e03da73238a5937",
     "abi": [
       {
         "type": "constructor",
